@@ -12,7 +12,7 @@ import gdown
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
 
-# ---------- Google Drive IDs ----------
+# ---------- Google Drive URLs ----------
 csv_zip_url = "https://drive.google.com/uc?id=1Iuzyu8H1vHvlPuV7LkXO3ZhTy3mvGT52"
 shp_zip_url = "https://drive.google.com/uc?id=181SO_yvEey7d-HijGeRzDeuLuoS0jJJt"
 
@@ -35,21 +35,26 @@ if not os.path.exists(shp_folder):
             zip_ref.extractall(shp_folder)
 
 # ---------- Load and Clean CSV ----------
-csv_files = [f for f in os.listdir(csv_folder) if f.endswith(".csv")]
-st.info(f"🔍 Found {len(csv_files)} CSV files in `{csv_folder}`")
+csv_files = []
+for root, dirs, files in os.walk(csv_folder):
+    for file in files:
+        if file.endswith(".csv"):
+            csv_files.append(os.path.join(root, file))
+
+st.info(f"🔍 Found {len(csv_files)} CSV files inside `{csv_folder}` and its subfolders")
 
 all_data = []
 
 for file in csv_files:
     try:
-        df = pd.read_csv(os.path.join(csv_folder, file), low_memory=False)
+        df = pd.read_csv(file, low_memory=False)
         df = df.dropna(subset=["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"])
         df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors='coerce')
         if not df.empty:
             all_data.append(df)
-            st.success(f"✅ Loaded `{file}` with {len(df)} records")
+            st.success(f"✅ Loaded `{os.path.basename(file)}` with {len(df)} records")
         else:
-            st.warning(f"⚠️ `{file}` has no valid rows and was skipped")
+            st.warning(f"⚠️ `{os.path.basename(file)}` has no valid rows and was skipped")
     except Exception as e:
         st.error(f"❌ Error reading `{file}`: {e}")
 
