@@ -36,12 +36,26 @@ if not os.path.exists(shp_folder):
 
 # ---------- Load and Clean CSV ----------
 csv_files = [f for f in os.listdir(csv_folder) if f.endswith(".csv")]
+st.info(f"🔍 Found {len(csv_files)} CSV files in `{csv_folder}`")
+
 all_data = []
+
 for file in csv_files:
-    df = pd.read_csv(os.path.join(csv_folder, file), low_memory=False)
-    df = df.dropna(subset=["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"])
-    df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors='coerce')
-    all_data.append(df)
+    try:
+        df = pd.read_csv(os.path.join(csv_folder, file), low_memory=False)
+        df = df.dropna(subset=["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"])
+        df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors='coerce')
+        if not df.empty:
+            all_data.append(df)
+            st.success(f"✅ Loaded `{file}` with {len(df)} records")
+        else:
+            st.warning(f"⚠️ `{file}` has no valid rows and was skipped")
+    except Exception as e:
+        st.error(f"❌ Error reading `{file}`: {e}")
+
+if not all_data:
+    st.error("❌ No valid CSV data was loaded. Please check the input files.")
+    st.stop()
 
 combined_df = pd.concat(all_data, ignore_index=True)
 combined_df = combined_df.dropna(subset=["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "MonitoringLocationIdentifier"])
