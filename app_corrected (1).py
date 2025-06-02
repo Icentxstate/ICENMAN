@@ -82,6 +82,10 @@ if not shapefile_list:
 shapefile_path = shapefile_list[0]
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
 
+# ---------- Clean gdf for JSON compatibility ----------
+gdf_safe = gdf[[col for col in gdf.columns if gdf[col].dtype.kind in 'ifO']].copy()
+gdf_safe["geometry"] = gdf["geometry"]
+
 # ---------- Color by Organization ----------
 orgs = combined_df["OrganizationFormalName"].dropna().unique()
 color_palette = list(mcolors.TABLEAU_COLORS.values()) + list(mcolors.CSS4_COLORS.values())
@@ -128,14 +132,14 @@ center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[center.y, center.x], zoom_start=7, tiles="CartoDB positron")
 
 folium.GeoJson(
-    gdf,
+    gdf_safe,
     style_function=lambda x: {
         "fillColor": "#0b5394",
         "color": "#0b5394",
         "weight": 2,
         "fillOpacity": 0.4,
     },
-    tooltip=gdf.columns[1] if len(gdf.columns) > 1 else None
+    tooltip=gdf_safe.columns[1] if len(gdf_safe.columns) > 1 else None
 ).add_to(m)
 
 for key, info in station_info.items():
