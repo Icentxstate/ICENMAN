@@ -12,39 +12,33 @@ import gdown
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
 
-# ---------- Google Drive URLs ----------
+# ---------- File Paths ----------
 csv_zip_url = "https://drive.google.com/uc?id=1Iuzyu8H1vHvlPuV7LkXO3ZhTy3mvGT52"
 shp_zip_url = "https://drive.google.com/uc?id=181SO_yvEey7d-HijGeRzDeuLuoS0jJJt"
-
 csv_zip_path = "biological_csvs.zip"
 shp_zip_path = "shape.zip"
 csv_folder = "csv_data"
 shp_folder = "shapefile_data"
 
-# ---------- Download + Unzip ----------
+# ---------- Download + Unzip (silently) ----------
 if not os.path.exists(csv_folder):
-    with st.spinner("⬇️ Downloading CSV data..."):
-        gdown.download(csv_zip_url, csv_zip_path, quiet=False)
-        with zipfile.ZipFile(csv_zip_path, 'r') as zip_ref:
-            zip_ref.extractall(csv_folder)
+    gdown.download(csv_zip_url, csv_zip_path, quiet=True)
+    with zipfile.ZipFile(csv_zip_path, 'r') as zip_ref:
+        zip_ref.extractall(csv_folder)
 
 if not os.path.exists(shp_folder):
-    with st.spinner("🗂️ Downloading Shapefile..."):
-        gdown.download(shp_zip_url, shp_zip_path, quiet=False)
-        with zipfile.ZipFile(shp_zip_path, 'r') as zip_ref:
-            zip_ref.extractall(shp_folder)
+    gdown.download(shp_zip_url, shp_zip_path, quiet=True)
+    with zipfile.ZipFile(shp_zip_path, 'r') as zip_ref:
+        zip_ref.extractall(shp_folder)
 
-# ---------- Load and Clean CSV ----------
+# ---------- Load CSV Files Recursively ----------
 csv_files = []
-for root, dirs, files in os.walk(csv_folder):
+for root, _, files in os.walk(csv_folder):
     for file in files:
         if file.endswith(".csv"):
             csv_files.append(os.path.join(root, file))
 
-st.info(f"🔍 Found {len(csv_files)} CSV files inside `{csv_folder}` and its subfolders")
-
 all_data = []
-
 for file in csv_files:
     try:
         df = pd.read_csv(file, low_memory=False)
@@ -52,14 +46,11 @@ for file in csv_files:
         df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors='coerce')
         if not df.empty:
             all_data.append(df)
-            st.success(f"✅ Loaded `{os.path.basename(file)}` with {len(df)} records")
-        else:
-            st.warning(f"⚠️ `{os.path.basename(file)}` has no valid rows and was skipped")
-    except Exception as e:
-        st.error(f"❌ Error reading `{file}`: {e}")
+    except:
+        pass  # skip errors silently
 
 if not all_data:
-    st.error("❌ No valid CSV data was loaded. Please check the input files.")
+    st.error("❌ No valid CSV data was loaded.")
     st.stop()
 
 combined_df = pd.concat(all_data, ignore_index=True)
@@ -112,11 +103,9 @@ for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
     }
 
 # ---------- Interactive Map ----------
-st.subheader("📍 Monitoring Stations Map")
 center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[center.y, center.x], zoom_start=7, tiles="CartoDB positron")
 
-# Add shapefile layer
 folium.GeoJson(
     gdf,
     style_function=lambda x: {
@@ -128,7 +117,6 @@ folium.GeoJson(
     tooltip="County"
 ).add_to(m)
 
-# Add monitoring points
 for station_id, info in station_info.items():
     table_html = "<table style='font-size: 12px'><tr><th>Parameter</th><th>First Date</th><th>Last Date</th><th>Gaps</th></tr>"
     for param in info["params"]:
@@ -163,7 +151,6 @@ if st_data and "last_object_clicked" in st_data:
             break
 
 if clicked_id:
-    st.subheader(f"📈 Time Series for Station {clicked_id}")
     df_station = combined_df[combined_df["MonitoringLocationIdentifier"] == clicked_id]
     selected_param = st.selectbox("Select parameter", df_station["CharacteristicName"].unique())
     chart_df = df_station[df_station["CharacteristicName"] == selected_param].sort_values("ActivityStartDate")
