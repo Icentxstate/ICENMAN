@@ -15,7 +15,7 @@ st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Water Quality Dashboard")
 
 # 2. مسیر فایل‌های فشرده
-csv_zip = "columns_kept.zip"
+csv_zip = "kept.zip"
 shp_zip = "filtered_11_counties.zip"
 csv_folder = "csv_extracted"
 shp_folder = "shp_extracted"
