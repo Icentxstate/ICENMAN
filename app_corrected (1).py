@@ -153,22 +153,28 @@ m.get_root().html.add_child(folium.Element(legend_html))
 # Show map
 st_data = st_folium(m, width=1300, height=600)
 
-# --- Time Series + Summary ---
-clicked_key = None
+# --- Toolbar below map ---
+clicked_lat = None
+clicked_lon = None
 if st_data and "last_object_clicked" in st_data:
-    lat = st_data["last_object_clicked"].get("lat")
-    lon = st_data["last_object_clicked"].get("lng")
-    if lat and lon:
-        clicked_key = f"{lat},{lon}"
+    clicked_lat = st_data["last_object_clicked"].get("lat")
+    clicked_lon = st_data["last_object_clicked"].get("lng")
 
-if clicked_key:
-    st.subheader(f"📈 Time Series for {selected_param} at {clicked_key}")
-    ts_df = filtered_df[filtered_df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
-    if not ts_df.empty:
-        st.line_chart(ts_df.set_index("ActivityStartDate")["ResultMeasureValue"])
+if clicked_lat and clicked_lon:
+    st.markdown("---")
+    st.markdown("### 🧪 Selected Station")
+    coords_str = f"{clicked_lat:.5f}, {clicked_lon:.5f}"
+    st.write(f"📍 Coordinates: `{coords_str}`")
+    
+    if st.button("📈 نمایش گراف و آمار"):
+        clicked_key = f"{clicked_lat},{clicked_lon}"
+        ts_df = filtered_df[filtered_df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
+        if not ts_df.empty:
+            st.subheader(f"📈 Time Series for {selected_param} at {coords_str}")
+            st.line_chart(ts_df.set_index("ActivityStartDate")["ResultMeasureValue"])
 
-        st.markdown("📊 **Statistical Summary**")
-        summary = ts_df["ResultMeasureValue"].describe().to_frame().T
-        st.dataframe(summary.style.format("{:.2f}"))
-    else:
-        st.info("No time series available for this location.")
+            st.markdown("📊 **Statistical Summary**")
+            summary = ts_df["ResultMeasureValue"].describe().to_frame().T
+            st.dataframe(summary.style.format("{:.2f}"))
+        else:
+            st.info("No time series available for this location.")
