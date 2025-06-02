@@ -5,7 +5,6 @@ import folium
 import zipfile
 import os
 import matplotlib.colors as mcolors
-from folium.plugins import FloatImage
 from streamlit_folium import st_folium
 import gdown
 
@@ -57,14 +56,11 @@ combined_df = pd.concat(all_data, ignore_index=True)
 combined_df = combined_df.dropna(subset=["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "MonitoringLocationIdentifier"])
 combined_df["ResultMeasureValue"] = pd.to_numeric(combined_df["ResultMeasureValue"], errors='coerce')
 
-# ---------- Load Shapefile ----------
+# ---------- Load and Prepare Shapefile ----------
 shapefile_path = os.path.join(shp_folder, "filtered_11_counties.shp")
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
-
-# ✅ Keep only necessary columns
 if "COUNTY" not in gdf.columns:
     gdf["COUNTY"] = "Unknown"
-
 gdf = gdf[["geometry", "COUNTY"]]
 
 # ---------- Color by Organization ----------
@@ -108,11 +104,10 @@ for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
         "gap_total": gap_total
     }
 
-# ---------- Interactive Map ----------
+# ---------- Build Map ----------
 center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[center.y, center.x], zoom_start=7, tiles="CartoDB positron")
 
-# ✅ Add shapefile layer safely
 folium.GeoJson(
     gdf,
     style_function=lambda x: {
@@ -124,7 +119,6 @@ folium.GeoJson(
     tooltip="COUNTY"
 ).add_to(m)
 
-# Add monitoring stations
 for station_id, info in station_info.items():
     table_html = "<table style='font-size: 12px'><tr><th>Parameter</th><th>First Date</th><th>Last Date</th><th>Gaps</th></tr>"
     for param in info["params"]:
@@ -150,16 +144,39 @@ for station_id, info in station_info.items():
 
 st_data = st_folium(m, width=1300, height=600)
 
-# ---------- Click-Based Chart ----------
+# ---------- Click-Based Chart with Highlight ----------
 clicked_id = None
-if st_data and "last_object_clicked" in st_data:
-    for sid, info in station_info.items():
-        if abs(info["lat"] - st_data["last_object_clicked"]["lat"]) < 1e-4 and abs(info["lon"] - st_data["last_object_clicked"]["lng"]) < 1e-4:
-            clicked_id = sid
-            break
+clicked_lat = None
+clicked_lng = None
+
+if st_data and isinstance(st_data.get("last_object_clicked"), dict):
+    clicked_point = st_data["last_object_clicked"]
+    clicked_lat = clicked_point.get("lat")
+    clicked_lng = clicked_point.get("lng")
+
+    if isinstance(clicked_lat, (int, float)) and isinstance(clicked_lng, (int, float)):
+        for sid, info in station_info.items():
+            if abs(info["lat"] - clicked_lat) < 1e-4 and abs(info["lon"] - clicked_lng) < 1e-4:
+                clicked_id = sid
+                break
 
 if clicked_id:
     df_station = combined_df[combined_df["MonitoringLocationIdentifier"] == clicked_id]
+    st.subheader(f"📈 Time Series for Station `{clicked_id}`")
     selected_param = st.selectbox("Select parameter", df_station["CharacteristicName"].unique())
     chart_df = df_station[df_station["CharacteristicName"] == selected_param].sort_values("ActivityStartDate")
     st.line_chart(chart_df.set_index("ActivityStartDate")["ResultMeasureValue"])
+
+    # Highlight on map
+    folium.CircleMarker(
+        location=[clicked_lat, clicked_lng],
+        radius=10,
+        color="red",
+        fill=True,
+        fill_opacity=1,
+        popup=folium.Popup(f"<b>Highlighted Station:</b><br>{clicked_id}", max_width=300),
+    ).add_to(m)
+
+    # Show updated map
+    st.subheader("📍 Highlighted Station")
+    st_folium(m, width=1300, height=600)
