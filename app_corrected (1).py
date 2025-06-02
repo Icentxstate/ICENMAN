@@ -6,37 +6,26 @@ import zipfile
 import os
 import matplotlib.colors as mcolors
 from streamlit_folium import st_folium
-import gdown
 
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
 
-# ---------- File Paths ----------
-csv_zip_url = "https://drive.google.com/uc?id=1Iuzyu8H1vHvlPuV7LkXO3ZhTy3mvGT52"
-shp_zip_url = "https://drive.google.com/uc?id=181SO_yvEey7d-HijGeRzDeuLuoS0jJJt"
-csv_zip_path = "biological_csvs.zip"
-shp_zip_path = "shape.zip"
-csv_folder = "csv_data"
-shp_folder = "shapefile_data"
+# ---------- Load CSVs from local ZIP ----------
+zip_path = "stream/columns_kept.zip"
+extract_to = "stream/extracted"
 
-# ---------- Download + Unzip ----------
-if not os.path.exists(csv_folder):
-    gdown.download(csv_zip_url, csv_zip_path, quiet=True)
-    with zipfile.ZipFile(csv_zip_path, 'r') as zip_ref:
-        zip_ref.extractall(csv_folder)
+if not os.path.exists(extract_to):
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(extract_to)
 
-if not os.path.exists(shp_folder):
-    gdown.download(shp_zip_url, shp_zip_path, quiet=True)
-    with zipfile.ZipFile(shp_zip_path, 'r') as zip_ref:
-        zip_ref.extractall(shp_folder)
-
-# ---------- Load CSV Files ----------
+# ---------- Find all CSV files inside nested structure ----------
 csv_files = []
-for root, _, files in os.walk(csv_folder):
+for root, _, files in os.walk(extract_to):
     for file in files:
         if file.endswith(".csv"):
             csv_files.append(os.path.join(root, file))
 
+# ---------- Load and combine data ----------
 all_data = []
 for file in csv_files:
     try:
@@ -65,11 +54,10 @@ organization_lookup = {
     "11NPSWRD_WQX": "National Park Service Water Resources Division",
     "OST_SHPD": "USEPA, Office of Water, Office of Science and Technology, Standards and Health Protection Division"
 }
-
 combined_df["OrganizationFormalName"] = combined_df["OrganizationIdentifier"].map(organization_lookup).fillna("Unknown")
 
-# ---------- Load and Prepare Shapefile ----------
-shapefile_path = os.path.join(shp_folder, "filtered_11_counties.shp")
+# ---------- Load and prepare shapefile ----------
+shapefile_path = "shapefile_data/filtered_11_counties.shp"
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
 if "COUNTY" not in gdf.columns:
     gdf["COUNTY"] = "Unknown"
