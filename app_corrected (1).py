@@ -1,113 +1,124 @@
-
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
 import folium
-import zipfile
 import os
 import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime
 from folium.plugins import MarkerCluster
 from streamlit_folium import st_folium
+from datetime import datetime
 
-# -------------------- Config --------------------
+# --- Page Config ---
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Water Quality Monitoring Dashboard")
 
-# -------------------- Extract Files --------------------
-csv_zip_path = "columns_kept.zip"
-shp_zip_path = "filtered_11_counties.zip"
-csv_extracted_path = "csv_extracted"
-shp_extracted_path = "shp_extracted"
+# --- File Paths ---
+csv_folder = "/mnt/data/kept_extracted/filtered_columns_kept"
+shapefile_folder = "/mnt/data/shapefile_extracted"
 
-for path, zip_path in zip([csv_extracted_path, shp_extracted_path], [csv_zip_path, shp_zip_path]):
-    if not os.path.exists(path):
-        with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(path)
+# --- Load Shapefile ---
+shapefile_path = None
+for file in os.listdir(shapefile_folder):
+    if file.endswith(".shp"):
+        shapefile_path = os.path.join(shapefile_folder, file)
+        break
 
-# -------------------- Load CSV Files --------------------
-csv_root = next(os.walk(csv_extracted_path))[1][0]
-csv_files = [os.path.join(csv_extracted_path, csv_root, f) for f in os.listdir(os.path.join(csv_extracted_path, csv_root)) if f.endswith(".csv")]
-
-dataframes = []
-for file in csv_files:
-    df = pd.read_csv(file, low_memory=False)
-    if "ActivityStartDate" in df.columns:
-        df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors="coerce")
-    dataframes.append(df)
-df_all = pd.concat(dataframes, ignore_index=True)
-
-# Filter for necessary columns
-required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"]
-df_all = df_all[[col for col in required_cols if col in df_all.columns]].dropna()
-
-# -------------------- Load Shapefile --------------------
-shp_files = [f for f in os.listdir(shp_extracted_path) if f.endswith(".shp")]
-shapefile_path = os.path.join(shp_extracted_path, shp_files[0])
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
 
-# -------------------- Sidebar Selection --------------------
-param_choices = sorted(df_all["CharacteristicName"].unique())
-main_param = st.sidebar.selectbox("🧪 Select Main Parameter (Map Display)", param_choices)
+# --- Load CSV files ---
+csv_files = [f for f in os.listdir(csv_folder) if f.endswith(".csv")]
+all_data = []
+for file in csv_files:
+    df = pd.read_csv(os.path.join(csv_folder, file), low_memory=False)
+    df = df.dropna(subset=["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure", "CharacteristicName", "ActivityStartDate"])
+    df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors='coerce')
+    all_data.append(df)
 
-# Latest value per location for selected param
-latest_df = df_all[df_all["CharacteristicName"] == main_param].sort_values("ActivityStartDate")
-latest_df = latest_df.groupby(["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"]).last().reset_index()
+if not all_data:
+    st.error("❌ No valid CSV data found.")
+    st.stop()
 
-# -------------------- Create Folium Map --------------------
-m = folium.Map(location=[28.5, -96], zoom_start=7, tiles="cartodbpositron")
+combined_df = pd.concat(all_data, ignore_index=True)
 
-# Add shapefile layer
-folium.GeoJson(gdf, style_function=lambda x: {
-    "fillColor": "#0b5394",
-    "color": "#0b5394",
-    "weight": 2,
-    "fillOpacity": 0.1,
-}).add_to(m)
+# --- Sidebar: Parameter Selection ---
+st.sidebar.header("Parameter for Map Visualization")
+parameter_for_map = st.sidebar.selectbox("Select a parameter to display on map:", combined_df["CharacteristicName"].unique())
 
-# Add station markers
-mc = MarkerCluster().add_to(m)
-for _, row in latest_df.iterrows():
-    summary = f"{main_param}: {round(row['ResultMeasureValue'], 2)}"
+# --- Latest Value per Site for Selected Parameter ---
+latest = combined_df[combined_df["CharacteristicName"] == parameter_for_map].sort_values("ActivityStartDate")
+latest = latest.groupby(["MonitoringLocationIdentifier"]).last().reset_index()
+
+# --- Create Map ---
+m = folium.Map(location=[28.5, -96.5], zoom_start=7, control_scale=True)
+
+# Add shapefile boundary
+folium.GeoJson(
+    gdf,
+    style_function=lambda x: {
+        "fillColor": "#0b5394",
+        "color": "#0b5394",
+        "weight": 2,
+        "fillOpacity": 0.1,
+    }
+).add_to(m)
+
+# --- Add Station Markers ---
+marker_cluster = MarkerCluster().add_to(m)
+for idx, row in latest.iterrows():
+    lat = row["ActivityLocation/LatitudeMeasure"]
+    lon = row["ActivityLocation/LongitudeMeasure"]
+    value = row["ResultMeasureValue"]
+    loc_id = row["MonitoringLocationIdentifier"]
     folium.CircleMarker(
-        location=[row["ActivityLocation/LatitudeMeasure"], row["ActivityLocation/LongitudeMeasure"]],
-        radius=5 + min(20, max(0, row["ResultMeasureValue"] / 5)),
+        location=[lat, lon],
+        radius=5 + (float(value) if pd.notnull(value) else 0)/5,
+        popup=f"<b>Station:</b> {loc_id}<br><b>Latest {parameter_for_map}:</b> {value}",
         color="blue",
         fill=True,
-        fill_opacity=0.6,
-        popup=summary,
-    ).add_to(mc)
+        fill_opacity=0.6
+    ).add_to(marker_cluster)
 
-# Display map
+# --- Interactive Map ---
 st_data = st_folium(m, width=1200, height=600)
 
-# -------------------- Coordinate selection --------------------
+# --- Extract Clicked Coordinates ---
 if st_data and st_data.get("last_clicked"):
-    lat = round(st_data["last_clicked"]["lat"], 5)
-    lon = round(st_data["last_clicked"]["lng"], 5)
-    st.markdown(f"### 📍 Selected Station Coordinates: ({lat}, {lon})")
-    run = st.button("Run Analysis")
+    coords = st_data["last_clicked"]
+    lat_clicked = coords.get("lat")
+    lon_clicked = coords.get("lng")
 
-    if run:
-        st.subheader("📈 Time Series & Correlation Analysis")
+    st.subheader("📈 Selected Station Time Series")
 
-        selected_df = df_all[(df_all["ActivityLocation/LatitudeMeasure"].round(5) == lat) & 
-                             (df_all["ActivityLocation/LongitudeMeasure"].round(5) == lon)]
+    # Match nearest station by coordinates
+    combined_df["coord_dist"] = ((combined_df["ActivityLocation/LatitudeMeasure"] - lat_clicked)**2 + (combined_df["ActivityLocation/LongitudeMeasure"] - lon_clicked)**2)
+    nearest_station = combined_df.loc[combined_df["coord_dist"].idxmin()]
+    selected_id = nearest_station["MonitoringLocationIdentifier"]
 
-        multiselect_params = st.multiselect("📌 Select Parameters to Plot", sorted(selected_df["CharacteristicName"].unique()), default=[main_param])
-        selected_df = selected_df[selected_df["CharacteristicName"].isin(multiselect_params)]
+    # --- Multiselect Parameters ---
+    st.markdown(f"**Selected Station:** `{selected_id}`")
+    param_options = combined_df[combined_df["MonitoringLocationIdentifier"] == selected_id]["CharacteristicName"].unique()
+    selected_params = st.multiselect("Select parameters to plot:", options=param_options.tolist(), default=[parameter_for_map])
 
-        if not selected_df.empty:
-            pivot_df = selected_df.pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue")
-            st.line_chart(pivot_df)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    for param in selected_params:
+        subset = combined_df[(combined_df["MonitoringLocationIdentifier"] == selected_id) & (combined_df["CharacteristicName"] == param)]
+        subset = subset.sort_values("ActivityStartDate")
+        ax.plot(subset["ActivityStartDate"], subset["ResultMeasureValue"], label=param)
 
-            st.markdown("#### 📊 Summary Statistics")
-            st.dataframe(pivot_df.describe())
+    ax.set_title("Time Series Plot")
+    ax.set_xlabel("Date")
+    ax.set_ylabel("Value")
+    ax.legend()
+    fig.autofmt_xdate()
+    st.pyplot(fig)
 
-            st.markdown("#### 🔥 Correlation Heatmap")
-            fig, ax = plt.subplots(figsize=(10, 5))
-            sns.heatmap(pivot_df.corr(), annot=True, cmap="coolwarm", ax=ax)
-            st.pyplot(fig)
-        else:
-            st.warning("No data available for selected station and parameters.")
+    # --- Correlation Heatmap ---
+    corr_df = combined_df[(combined_df["MonitoringLocationIdentifier"] == selected_id) & (combined_df["CharacteristicName"].isin(selected_params))]
+    pivot = corr_df.pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue")
+    corr_matrix = pivot.corr()
+
+    st.subheader("🔍 Correlation Heatmap")
+    fig2, ax2 = plt.subplots()
+    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", ax=ax2)
+    st.pyplot(fig2)
