@@ -18,7 +18,7 @@ if not os.path.exists(extract_to):
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(extract_to)
 
-# ---------- Find all CSV files inside nested structure ----------
+# ---------- Find all CSV files ----------
 csv_files = []
 for root, _, files in os.walk(extract_to):
     for file in files:
@@ -43,15 +43,14 @@ if not all_data:
 
 combined_df = pd.concat(all_data, ignore_index=True)
 
-# ---------- Check required columns ----------
-required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "MonitoringLocationIdentifier"]
+# ---------- Ensure required columns ----------
+required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue"]
 missing_cols = [col for col in required_cols if col not in combined_df.columns]
 
 if missing_cols:
     st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
     st.stop()
 
-# ---------- Clean and transform ----------
 combined_df = combined_df.dropna(subset=required_cols)
 combined_df["ResultMeasureValue"] = pd.to_numeric(combined_df["ResultMeasureValue"], errors='coerce')
 
@@ -65,6 +64,9 @@ organization_lookup = {
     "OST_SHPD": "USEPA, Office of Water, Office of Science and Technology, Standards and Health Protection Division"
 }
 combined_df["OrganizationFormalName"] = combined_df["OrganizationIdentifier"].map(organization_lookup).fillna("Unknown")
+
+# ---------- Create unique station key by lat/lon ----------
+combined_df["StationKey"] = combined_df["ActivityLocation/LatitudeMeasure"].astype(str) + "," + combined_df["ActivityLocation/LongitudeMeasure"].astype(str)
 
 # ---------- Load shapefile ----------
 shapefile_path = "shapefile_data/filtered_11_counties.shp"
@@ -80,7 +82,7 @@ org_colors = {org: color_palette[i % len(color_palette)] for i, org in enumerate
 
 # ---------- Summarize by Station ----------
 station_info = {}
-for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
+for station_key, group in combined_df.groupby("StationKey"):
     lat = group["ActivityLocation/LatitudeMeasure"].iloc[0]
     lon = group["ActivityLocation/LongitudeMeasure"].iloc[0]
     orgs = group["OrganizationFormalName"].dropna().unique()
@@ -105,7 +107,7 @@ for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
             "TimeGaps": f"{gap_count}"
         })
 
-    station_info[station_id] = {
+    station_info[station_key] = {
         "lat": lat,
         "lon": lon,
         "organization": org_display,
@@ -114,7 +116,7 @@ for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
         "gap_total": gap_total
     }
 
-# ---------- Build map ----------
+# ---------- Build Map ----------
 center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[center.y, center.x], zoom_start=7, tiles="CartoDB positron")
 
@@ -129,7 +131,7 @@ folium.GeoJson(
     tooltip="COUNTY"
 ).add_to(m)
 
-for station_id, info in station_info.items():
+for station_key, info in station_info.items():
     table_html = "<table style='font-size: 12px'><tr><th>Parameter</th><th>First Date</th><th>Last Date</th><th>Gaps</th></tr>"
     for param in info["params"]:
         table_html += f"<tr><td>{param['Parameter']}</td><td>{param['FirstDate']}</td><td>{param['LastDate']}</td><td>{param['TimeGaps']}</td></tr>"
@@ -137,7 +139,7 @@ for station_id, info in station_info.items():
 
     popup_html = f"""
     <div style='font-size:13px; max-height:300px; overflow:auto;'>
-        <b>Station ID:</b> {station_id}<br>
+        <b>Location:</b> {station_key}<br>
         <b>Organization:</b> {info["organization"]}<br>
         <b>Total Gaps &gt;30d:</b> {info["gap_total"]}<br><br>
         {table_html}
@@ -155,24 +157,18 @@ for station_id, info in station_info.items():
 st_data = st_folium(m, width=1300, height=600)
 
 # ---------- Click-Based Chart ----------
-clicked_id = None
-clicked_lat = None
-clicked_lng = None
-
+clicked_key = None
 if st_data and isinstance(st_data.get("last_object_clicked"), dict):
     clicked_point = st_data["last_object_clicked"]
     clicked_lat = clicked_point.get("lat")
     clicked_lng = clicked_point.get("lng")
 
     if isinstance(clicked_lat, (int, float)) and isinstance(clicked_lng, (int, float)):
-        for sid, info in station_info.items():
-            if abs(info["lat"] - clicked_lat) < 1e-4 and abs(info["lon"] - clicked_lng) < 1e-4:
-                clicked_id = sid
-                break
+        clicked_key = f"{clicked_lat},{clicked_lng}"
 
-if clicked_id:
-    df_station = combined_df[combined_df["MonitoringLocationIdentifier"] == clicked_id]
-    st.subheader(f"📈 Time Series for Station `{clicked_id}`")
+if clicked_key and clicked_key in station_info:
+    st.subheader(f"📈 Time Series for Station `{clicked_key}`")
+    df_station = combined_df[combined_df["StationKey"] == clicked_key]
     selected_param = st.selectbox("Select parameter", df_station["CharacteristicName"].unique())
     chart_df = df_station[df_station["CharacteristicName"] == selected_param].sort_values("ActivityStartDate")
     st.line_chart(chart_df.set_index("ActivityStartDate")["ResultMeasureValue"])
@@ -183,7 +179,7 @@ if clicked_id:
         color="red",
         fill=True,
         fill_opacity=1,
-        popup=folium.Popup(f"<b>Highlighted Station:</b><br>{clicked_id}", max_width=300),
+        popup=folium.Popup(f"<b>Highlighted Station:</b><br>{clicked_key}", max_width=300),
     ).add_to(m)
 
     st.subheader("📍 Highlighted Station")
