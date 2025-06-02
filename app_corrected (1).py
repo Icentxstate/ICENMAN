@@ -1,67 +1,104 @@
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
-import requests
-from io import BytesIO
-import zipfile
+import folium
+from folium.plugins import MarkerCluster
+from streamlit_folium import st_folium
 import os
+import zipfile
 import matplotlib.pyplot as plt
 import seaborn as sns
-import folium
-from streamlit_folium import folium_static
 
-# تنظیمات اولیه
+# --- Page Config ---
 st.set_page_config(layout="wide")
-st.title("📍 اپلیکیشن تحلیلی مکانی و زمانی")
+st.title("📍 Interactive Water Quality Explorer")
 
-# آدرس مخزن گیت‌هاب
-REPO_URL = "https://github.com/Icentxstate/ICENMAN/raw/main"
+# --- Extract ZIPs if needed ---
+csv_zip = "kept.zip"
+shp_zip = "filtered_11_counties.zip"
+csv_folder = "csv_extracted/filtered_columns_kept"
+shp_folder = "shapefile_extracted"
 
-# تابع بارگذاری فایل زیپ از گیت‌هاب
-def load_zip_from_github(zip_filename, extract_to="data"):
-    url = f"{REPO_URL}/{zip_filename}"
-    response = requests.get(url)
-    with zipfile.ZipFile(BytesIO(response.content)) as z:
-        z.extractall(extract_to)
-    return extract_to
+if not os.path.exists(csv_folder):
+    with zipfile.ZipFile(csv_zip, 'r') as zip_ref:
+        zip_ref.extractall("csv_extracted")
 
-# بارگذاری داده‌ها
-with st.spinner("در حال بارگذاری داده‌ها..."):
-    csv_dir = load_zip_from_github("columns_kept.zip", "csv_data")
-    shp_dir = load_zip_from_github("filtered_11_counties.zip", "shp_data")
+if not os.path.exists(shp_folder):
+    with zipfile.ZipFile(shp_zip, 'r') as zip_ref:
+        zip_ref.extractall(shp_folder)
 
-    # بارگذاری CSVها
-    csv_files = [f for f in os.listdir(csv_dir) if f.endswith(".csv")]
-    df_list = [pd.read_csv(os.path.join(csv_dir, f)) for f in csv_files]
-    df = pd.concat(df_list, ignore_index=True)
+# --- Load Shapefile ---
+shapefile_path = [f for f in os.listdir(shp_folder) if f.endswith(".shp")][0]
+gdf_boundary = gpd.read_file(os.path.join(shp_folder, shapefile_path))
 
-    # بارگذاری shapefile
-    shp_files = [f for f in os.listdir(shp_dir) if f.endswith(".shp")]
-    gdf = gpd.read_file(os.path.join(shp_dir, shp_files[0]))
+# --- Load CSVs ---
+csv_path = os.path.join("csv_extracted", "filtered_columns_kept")
+csv_files = [os.path.join(csv_path, f) for f in os.listdir(csv_path) if f.endswith(".csv")]
+df_all = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
+df_all = df_all.dropna(subset=["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"])
+df_all["ActivityStartDate"] = pd.to_datetime(df_all["ActivityStartDate"], errors='coerce')
+df_all["ResultMeasureValue"] = pd.to_numeric(df_all["ResultMeasureValue"], errors='coerce')
 
-# نمایش نقشه
-st.subheader("🗺️ نقشه نقاط")
-m = folium.Map(location=[gdf.geometry.centroid.y.mean(), gdf.geometry.centroid.x.mean()], zoom_start=8)
-for _, row in gdf.iterrows():
+# --- Get Latest Values per Location/Parameter ---
+latest = df_all.sort_values("ActivityStartDate").groupby(["MonitoringLocationIdentifier", "CharacteristicName"]).last().reset_index()
+
+# --- Build Station Summary ---
+station_info = {}
+for station in latest["MonitoringLocationIdentifier"].unique():
+    sub = latest[latest["MonitoringLocationIdentifier"] == station]
+    summary = "".join([f"<li>{p}: {round(v,2)} {u}</li>" for p, v, u in zip(sub["CharacteristicName"], sub["ResultMeasureValue"], sub["ResultMeasure/MeasureUnitCode"])])
+    coords = sub.iloc[0][["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"]].values
+    station_info[station] = {"html": f"<ul>{summary}</ul>", "lat": coords[0], "lon": coords[1]}
+
+# --- Map ---
+m = folium.Map(location=[28.5, -96], zoom_start=7)
+folium.GeoJson(gdf_boundary, name="Boundary").add_to(m)
+
+marker_cluster = MarkerCluster().add_to(m)
+for station, info in station_info.items():
     folium.Marker(
-        location=[row.geometry.centroid.y, row.geometry.centroid.x],
-        popup="کلیک برای مشاهده پارامترها",
-        tooltip="نقطه",
-    ).add_to(m)
-folium_static(m)
+        location=[info["lat"], info["lon"]],
+        popup=folium.Popup(info["html"], max_width=300),
+        tooltip=station
+    ).add_to(marker_cluster)
 
-# انتخاب پارامتر و رسم گراف
-st.subheader("📊 انتخاب پارامترها برای رسم گراف")
-params = [col for col in df.columns if col not in ['timestamp', 'lat', 'lon']]
-selected_params = st.multiselect("پارامترها:", params)
+st.markdown("### 🗺️ Monitoring Stations")
+map_data = st_folium(m, height=500, returned_objects=["last_object_clicked"], key="map")
 
-if selected_params:
-    st.line_chart(df[selected_params])
+# --- Toolbar ---
+clicked_station = map_data.get("last_object_clicked")
+if clicked_station:
+    lat, lon = clicked_station["lat"], clicked_station["lng"]
+    selected = df_all[(df_all["ActivityLocation/LatitudeMeasure"] == lat) & (df_all["ActivityLocation/LongitudeMeasure"] == lon)]
+    station_id = selected["MonitoringLocationIdentifier"].iloc[0]
 
-# هیت‌مپ همبستگی
-if st.button("📈 نمایش هیت‌مپ همبستگی"):
-    st.subheader("🔍 همبستگی بین پارامترها")
-    corr = df[selected_params].corr()
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax)
-    st.pyplot(fig)
+    st.markdown(f"### 📌 Selected Station: `{station_id}`")
+
+    parameters = selected["CharacteristicName"].unique().tolist()
+    selected_params = st.multiselect("Choose Parameters", parameters, default=parameters[:1])
+
+    if selected_params:
+        fig, ax = plt.subplots(figsize=(12, 5))
+        for param in selected_params:
+            subset = selected[selected["CharacteristicName"] == param]
+            subset = subset.sort_values("ActivityStartDate")
+            ax.plot(subset["ActivityStartDate"], subset["ResultMeasureValue"], label=param)
+        ax.set_title(f"Time Series at {station_id}")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Value")
+        ax.legend()
+        st.pyplot(fig)
+
+        # --- Correlation Heatmap ---
+        pivot = selected[selected["CharacteristicName"].isin(selected_params)].pivot_table(
+            index="ActivityStartDate",
+            columns="CharacteristicName",
+            values="ResultMeasureValue"
+        )
+        corr = pivot.corr()
+        st.markdown("#### 🔍 Correlation Heatmap")
+        fig_corr, ax_corr = plt.subplots(figsize=(8, 6))
+        sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax_corr)
+        st.pyplot(fig_corr)
+else:
+    st.info("Click on a point on the map to begin analysis.")
