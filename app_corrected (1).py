@@ -4,28 +4,34 @@ import geopandas as gpd
 import folium
 import zipfile
 import os
+import glob
 import matplotlib.colors as mcolors
 from streamlit_folium import st_folium
 
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
 
-# ---------- Load CSVs from ZIP ----------
-zip_path = "columns_kept.zip"
-extract_to = "extracted"
+# ---------- Extract ZIP Files ----------
+csv_zip = "columns_kept.zip"
+shp_zip = "filtered_11_counties.zip"
+csv_folder = "csv_extracted"
+shp_folder = "shp_extracted"
 
-if not os.path.exists(extract_to):
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall(extract_to)
+if not os.path.exists(csv_folder):
+    with zipfile.ZipFile(csv_zip, 'r') as zip_ref:
+        zip_ref.extractall(csv_folder)
 
-# ---------- Find all CSV files ----------
+if not os.path.exists(shp_folder):
+    with zipfile.ZipFile(shp_zip, 'r') as zip_ref:
+        zip_ref.extractall(shp_folder)
+
+# ---------- Load CSVs ----------
 csv_files = []
-for root, _, files in os.walk(extract_to):
+for root, _, files in os.walk(csv_folder):
     for file in files:
         if file.endswith(".csv"):
             csv_files.append(os.path.join(root, file))
 
-# ---------- Load and combine data ----------
 all_data = []
 for file in csv_files:
     try:
@@ -35,20 +41,19 @@ for file in csv_files:
         if not df.empty:
             all_data.append(df)
     except Exception as e:
-        st.warning(f"⚠️ Could not load {file}: {e}")
+        st.warning(f"⚠️ Error loading {file}: {e}")
 
 if not all_data:
-    st.error("❌ No valid CSV data was loaded.")
+    st.error("❌ No valid CSV data found.")
     st.stop()
 
 combined_df = pd.concat(all_data, ignore_index=True)
 
-# ---------- Ensure required columns ----------
+# ---------- Check Columns ----------
 required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue"]
-missing_cols = [col for col in required_cols if col not in combined_df.columns]
-
-if missing_cols:
-    st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+missing = [col for col in required_cols if col not in combined_df.columns]
+if missing:
+    st.error(f"❌ Missing required columns: {', '.join(missing)}")
     st.stop()
 
 combined_df = combined_df.dropna(subset=required_cols)
@@ -61,26 +66,28 @@ organization_lookup = {
     "NARS_WQX": "EPA National Aquatic Resources Survey (NARS)",
     "TXSTRMTM_WQX": "Texas Stream Team",
     "11NPSWRD_WQX": "National Park Service Water Resources Division",
-    "OST_SHPD": "USEPA, Office of Water, Office of Science and Technology, Standards and Health Protection Division"
+    "OST_SHPD": "USEPA Office of Science and Technology"
 }
 combined_df["OrganizationFormalName"] = combined_df["OrganizationIdentifier"].map(organization_lookup).fillna("Unknown")
 
-# ---------- Create unique station key by lat/lon ----------
+# ---------- Define StationKey by lat/lon ----------
 combined_df["StationKey"] = combined_df["ActivityLocation/LatitudeMeasure"].astype(str) + "," + combined_df["ActivityLocation/LongitudeMeasure"].astype(str)
 
-# ---------- Load shapefile ----------
-shapefile_path = "shapefile_data/filtered_11_counties.shp"
+# ---------- Load Shapefile Automatically ----------
+shapefile_list = glob.glob(os.path.join(shp_folder, "**", "*.shp"), recursive=True)
+if not shapefile_list:
+    st.error("❌ No shapefile (.shp) found in ZIP.")
+    st.stop()
+
+shapefile_path = shapefile_list[0]
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
-if "COUNTY" not in gdf.columns:
-    gdf["COUNTY"] = "Unknown"
-gdf = gdf[["geometry", "COUNTY"]]
 
 # ---------- Color by Organization ----------
 orgs = combined_df["OrganizationFormalName"].dropna().unique()
 color_palette = list(mcolors.TABLEAU_COLORS.values()) + list(mcolors.CSS4_COLORS.values())
 org_colors = {org: color_palette[i % len(color_palette)] for i, org in enumerate(orgs)}
 
-# ---------- Summarize by Station ----------
+# ---------- Summarize Stations ----------
 station_info = {}
 for station_key, group in combined_df.groupby("StationKey"):
     lat = group["ActivityLocation/LatitudeMeasure"].iloc[0]
@@ -116,7 +123,7 @@ for station_key, group in combined_df.groupby("StationKey"):
         "gap_total": gap_total
     }
 
-# ---------- Build Map ----------
+# ---------- Map ----------
 center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[center.y, center.x], zoom_start=7, tiles="CartoDB positron")
 
@@ -128,18 +135,18 @@ folium.GeoJson(
         "weight": 2,
         "fillOpacity": 0.4,
     },
-    tooltip="COUNTY"
+    tooltip=gdf.columns[1] if len(gdf.columns) > 1 else None
 ).add_to(m)
 
-for station_key, info in station_info.items():
-    table_html = "<table style='font-size: 12px'><tr><th>Parameter</th><th>First Date</th><th>Last Date</th><th>Gaps</th></tr>"
+for key, info in station_info.items():
+    table_html = "<table style='font-size: 12px'><tr><th>Parameter</th><th>First</th><th>Last</th><th>Gaps</th></tr>"
     for param in info["params"]:
         table_html += f"<tr><td>{param['Parameter']}</td><td>{param['FirstDate']}</td><td>{param['LastDate']}</td><td>{param['TimeGaps']}</td></tr>"
     table_html += "</table>"
 
     popup_html = f"""
     <div style='font-size:13px; max-height:300px; overflow:auto;'>
-        <b>Location:</b> {station_key}<br>
+        <b>Location:</b> {key}<br>
         <b>Organization:</b> {info["organization"]}<br>
         <b>Total Gaps &gt;30d:</b> {info["gap_total"]}<br><br>
         {table_html}
@@ -156,31 +163,16 @@ for station_key, info in station_info.items():
 
 st_data = st_folium(m, width=1300, height=600)
 
-# ---------- Click-Based Chart ----------
+# ---------- Click Plot ----------
 clicked_key = None
 if st_data and isinstance(st_data.get("last_object_clicked"), dict):
-    clicked_point = st_data["last_object_clicked"]
-    clicked_lat = clicked_point.get("lat")
-    clicked_lng = clicked_point.get("lng")
-
-    if isinstance(clicked_lat, (int, float)) and isinstance(clicked_lng, (int, float)):
-        clicked_key = f"{clicked_lat},{clicked_lng}"
+    clicked_lat = st_data["last_object_clicked"].get("lat")
+    clicked_lng = st_data["last_object_clicked"].get("lng")
+    clicked_key = f"{clicked_lat},{clicked_lng}"
 
 if clicked_key and clicked_key in station_info:
-    st.subheader(f"📈 Time Series for Station `{clicked_key}`")
+    st.subheader(f"📈 Time Series for Station {clicked_key}")
     df_station = combined_df[combined_df["StationKey"] == clicked_key]
     selected_param = st.selectbox("Select parameter", df_station["CharacteristicName"].unique())
     chart_df = df_station[df_station["CharacteristicName"] == selected_param].sort_values("ActivityStartDate")
     st.line_chart(chart_df.set_index("ActivityStartDate")["ResultMeasureValue"])
-
-    folium.CircleMarker(
-        location=[clicked_lat, clicked_lng],
-        radius=10,
-        color="red",
-        fill=True,
-        fill_opacity=1,
-        popup=folium.Popup(f"<b>Highlighted Station:</b><br>{clicked_key}", max_width=300),
-    ).add_to(m)
-
-    st.subheader("📍 Highlighted Station")
-    st_folium(m, width=1300, height=600)
