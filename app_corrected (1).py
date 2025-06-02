@@ -171,8 +171,16 @@ if clicked_lat and clicked_lon:
         ts_df = filtered_df[filtered_df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
         if not ts_df.empty:
             st.subheader(f"📈 Time Series for {selected_param} at {coords_str}")
+
+            # ⏳ Show time range
+            date_min = ts_df["ActivityStartDate"].min().strftime("%Y-%m-%d")
+            date_max = ts_df["ActivityStartDate"].max().strftime("%Y-%m-%d")
+            st.markdown(f"🗓️ Data available from **{date_min}** to **{date_max}**")
+
+            # 📉 Line chart
             st.line_chart(ts_df.set_index("ActivityStartDate")["ResultMeasureValue"])
 
+            # 📊 Summary stats
             st.markdown("📊 **Statistical Summary**")
             summary = ts_df["ResultMeasureValue"].describe().to_frame().T
             st.dataframe(summary.style.format("{:.2f}"))
