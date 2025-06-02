@@ -12,10 +12,9 @@ from streamlit_folium import st_folium
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
 
-# ---------------- Load and unzip data ----------------
+# ---------------- Unzip Data ----------------
 csv_zip_path = "columns_kept.zip"
 shp_zip_path = "filtered_11_counties.zip"
-
 csv_folder = "unzipped_csvs"
 shp_folder = "unzipped_shapefile"
 
@@ -42,7 +41,7 @@ if not all_data:
     st.stop()
 
 combined_df = pd.concat(all_data, ignore_index=True)
-required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "MonitoringLocationIdentifier"]
+required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue"]
 missing_cols = [col for col in required_cols if col not in combined_df.columns]
 if missing_cols:
     st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
@@ -71,10 +70,7 @@ selected_map_param = st.sidebar.selectbox("Parameter", sorted(available_params))
 
 # ---------------- Summarize Station Info ----------------
 station_info = {}
-for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
-    lat = group["ActivityLocation/LatitudeMeasure"].iloc[0]
-    lon = group["ActivityLocation/LongitudeMeasure"].iloc[0]
-
+for (lat, lon), group in combined_df.groupby(["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"]):
     latest_val = group[group["CharacteristicName"] == selected_map_param].sort_values("ActivityStartDate")["ResultMeasureValue"].dropna()
     latest_val = latest_val.iloc[-1] if not latest_val.empty else None
 
@@ -91,11 +87,10 @@ for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
             "TimeGaps": f"{gap_count}"
         })
 
-    station_info[station_id] = {
-        "lat": lat,
-        "lon": lon,
+    station_info[(lat, lon)] = {
         "latest_value": latest_val,
-        "params": param_summary
+        "params": param_summary,
+        "df": group,
     }
 
 # ---------------- Draw Map ----------------
@@ -110,11 +105,11 @@ folium.GeoJson(gdf, style_function=lambda x: {
     "fillOpacity": 0.4
 }).add_to(m)
 
-for sid, info in station_info.items():
+for (lat, lon), info in station_info.items():
     size = info["latest_value"] if info["latest_value"] is not None else 2
-    popup_html = f"<b>Station ID:</b> {sid}<br><b>{selected_map_param} (latest):</b> {size:.2f if size else 'N/A'}"
+    popup_html = f"<b>Lat:</b> {lat:.4f}<br><b>Lon:</b> {lon:.4f}<br><b>{selected_map_param} (latest):</b> {size:.2f if size else 'N/A'}"
     folium.CircleMarker(
-        location=[info["lat"], info["lon"]],
+        location=[lat, lon],
         radius=min(max(size, 2), 20),
         color="blue",
         fill=True,
@@ -133,16 +128,16 @@ if st_data and isinstance(st_data.get("last_object_clicked"), dict):
     clicked_lon = st_data["last_object_clicked"].get("lng")
 
     # Find closest station
-    selected_station = None
-    for sid, info in station_info.items():
-        if abs(info["lat"] - clicked_lat) < 1e-4 and abs(info["lon"] - clicked_lon) < 1e-4:
-            selected_station = sid
+    selected_key = None
+    for (lat, lon) in station_info.keys():
+        if abs(lat - clicked_lat) < 1e-4 and abs(lon - clicked_lon) < 1e-4:
+            selected_key = (lat, lon)
             break
 
-    if selected_station:
-        st.subheader(f"📍 Selected Station: `{selected_station}`")
+    if selected_key:
+        st.subheader(f"📍 Selected Station: Lat {selected_key[0]:.4f}, Lon {selected_key[1]:.4f}")
 
-        df_station = combined_df[combined_df["MonitoringLocationIdentifier"] == selected_station]
+        df_station = station_info[selected_key]["df"]
         param_options = df_station["CharacteristicName"].unique()
         selected_params = st.multiselect("📊 Select parameters for time series + correlation", options=sorted(param_options), default=[selected_map_param])
 
