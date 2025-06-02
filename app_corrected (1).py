@@ -10,9 +10,9 @@ from streamlit_folium import st_folium
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
 
-# ---------- Load CSVs from local ZIP ----------
-zip_path = "stream/columns_kept.zip"
-extract_to = "stream/extracted"
+# ---------- Load CSVs from columns_kept.zip ----------
+zip_path = "columns_kept.zip"
+extract_to = "extracted"
 
 if not os.path.exists(extract_to):
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
