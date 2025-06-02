@@ -56,6 +56,18 @@ combined_df = pd.concat(all_data, ignore_index=True)
 combined_df = combined_df.dropna(subset=["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "MonitoringLocationIdentifier"])
 combined_df["ResultMeasureValue"] = pd.to_numeric(combined_df["ResultMeasureValue"], errors='coerce')
 
+# ---------- Map OrganizationIdentifier to Formal Names ----------
+organization_lookup = {
+    "TCEQMAIN": "Texas Commission on Environmental Quality",
+    "NALMS": "North American Lake Management Society",
+    "NARS_WQX": "EPA National Aquatic Resources Survey (NARS)",
+    "TXSTRMTM_WQX": "Texas Stream Team",
+    "11NPSWRD_WQX": "National Park Service Water Resources Division",
+    "OST_SHPD": "USEPA, Office of Water, Office of Science and Technology, Standards and Health Protection Division"
+}
+
+combined_df["OrganizationFormalName"] = combined_df["OrganizationIdentifier"].map(organization_lookup).fillna("Unknown")
+
 # ---------- Load and Prepare Shapefile ----------
 shapefile_path = os.path.join(shp_folder, "filtered_11_counties.shp")
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
