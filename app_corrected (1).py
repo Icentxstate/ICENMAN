@@ -8,6 +8,7 @@ import os
 import zipfile
 import matplotlib.pyplot as plt
 import seaborn as sns
+import json
 
 # --- Page Config ---
 st.set_page_config(layout="wide")
@@ -31,6 +32,11 @@ if not os.path.exists(shp_folder):
 shapefile_path = [f for f in os.listdir(shp_folder) if f.endswith(".shp")][0]
 gdf_boundary = gpd.read_file(os.path.join(shp_folder, shapefile_path))
 
+# Check shapefile validity
+if gdf_boundary.empty:
+    st.error("❌ Shapefile is empty or not loaded correctly.")
+    st.stop()
+
 # --- Load CSVs ---
 csv_path = os.path.join("csv_extracted", "filtered_columns_kept")
 csv_files = [os.path.join(csv_path, f) for f in os.listdir(csv_path) if f.endswith(".csv")]
@@ -52,7 +58,10 @@ for station in latest["MonitoringLocationIdentifier"].unique():
 
 # --- Map ---
 m = folium.Map(location=[28.5, -96], zoom_start=7)
-folium.GeoJson(gdf_boundary, name="Boundary").add_to(m)
+
+# Fix: convert to GeoJSON safely
+geojson_data = json.loads(gdf_boundary.to_json())
+folium.GeoJson(geojson_data, name="Boundary").add_to(m)
 
 marker_cluster = MarkerCluster().add_to(m)
 for station, info in station_info.items():
@@ -80,8 +89,7 @@ if clicked_station:
     if selected_params:
         fig, ax = plt.subplots(figsize=(12, 5))
         for param in selected_params:
-            subset = selected[selected["CharacteristicName"] == param]
-            subset = subset.sort_values("ActivityStartDate")
+            subset = selected[selected["CharacteristicName"] == param].sort_values("ActivityStartDate")
             ax.plot(subset["ActivityStartDate"], subset["ResultMeasureValue"], label=param)
         ax.set_title(f"Time Series at {station_id}")
         ax.set_xlabel("Date")
