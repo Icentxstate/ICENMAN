@@ -1,35 +1,41 @@
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
-import zipfile
-import os
 import folium
 from streamlit_folium import st_folium
+import zipfile
+import os
 import matplotlib.pyplot as plt
 import seaborn as sns
-from io import BytesIO
+from folium.plugins import MarkerCluster
 
-# ------------------ Paths ------------------
-CSV_ZIP_PATH = "columns_kept.zip"
-SHP_ZIP_PATH = "filtered_11_counties.zip"
+# ---------------------- تنظیمات صفحه ----------------------
+st.set_page_config(layout="wide")
+st.title("Texas Coastal Hydrologic Monitoring Project")
 
-# ------------------ Extract CSV ------------------
-csv_extract_path = "columns_kept_unzipped"
-os.makedirs(csv_extract_path, exist_ok=True)
-with zipfile.ZipFile(CSV_ZIP_PATH, 'r') as zip_ref:
-    zip_ref.extractall(csv_extract_path)
+# ---------------------- مسیرها ----------------------
+data_zip_path = "columns_kept.zip"
+shape_zip_path = "filtered_11_counties.zip"
+data_extract_path = "columns_kept"
+shape_extract_path = "filtered_11_counties"
 
-# Detect inner folder and find CSV files
-inner_folders = [os.path.join(csv_extract_path, d) for d in os.listdir(csv_extract_path) if os.path.isdir(os.path.join(csv_extract_path, d))]
-csv_folder = inner_folders[0] if inner_folders else csv_extract_path
+# ---------------------- استخراج داده‌ها ----------------------
+if not os.path.exists(data_extract_path):
+    with zipfile.ZipFile(data_zip_path, 'r') as zip_ref:
+        zip_ref.extractall(data_extract_path)
+
+if not os.path.exists(shape_extract_path):
+    with zipfile.ZipFile(shape_zip_path, 'r') as zip_ref:
+        zip_ref.extractall(shape_extract_path)
+
+# ---------------------- بارگذاری داده‌ها ----------------------
+csv_folder = os.path.join(data_extract_path, os.listdir(data_extract_path)[0])
 csv_files = [f for f in os.listdir(csv_folder) if f.endswith(".csv")]
-
-# ------------------ Load Data ------------------
 all_data = []
 for file in csv_files:
     df = pd.read_csv(os.path.join(csv_folder, file), low_memory=False)
-    if {"ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure", "ActivityStartDate", "CharacteristicName", "ResultMeasureValue"}.issubset(df.columns):
-        df = df.dropna(subset=["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure", "ActivityStartDate"])
+    if "ActivityLocation/LatitudeMeasure" in df.columns and "ActivityLocation/LongitudeMeasure" in df.columns:
+        df = df.dropna(subset=["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"])
         df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors='coerce')
         df["ResultMeasureValue"] = pd.to_numeric(df["ResultMeasureValue"], errors='coerce')
         all_data.append(df)
@@ -40,30 +46,21 @@ if not all_data:
 
 combined_df = pd.concat(all_data, ignore_index=True)
 
-# ------------------ Extract SHP ------------------
-shp_extract_path = "shapefile_extracted"
-os.makedirs(shp_extract_path, exist_ok=True)
-with zipfile.ZipFile(SHP_ZIP_PATH, 'r') as zip_ref:
-    zip_ref.extractall(shp_extract_path)
+# ---------------------- آماده‌سازی داده مکانی ----------------------
+gdf = gpd.read_file(os.path.join(shape_extract_path, "filtered_11_counties.shp"))
+gdf = gdf.to_crs(epsg=4326)
 
-shapefile_path = [os.path.join(shp_extract_path, f) for f in os.listdir(shp_extract_path) if f.endswith(".shp")][0]
-gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
+# ---------------------- نقشه ----------------------
+st.subheader("Monitoring Map")
+parameter_for_map = st.selectbox("Select parameter to map by size:", combined_df["CharacteristicName"].dropna().unique())
+latest_values = (
+    combined_df[combined_df["CharacteristicName"] == parameter_for_map]
+    .sort_values("ActivityStartDate")
+    .groupby(["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"])
+    .tail(1)
+)
 
-# ------------------ Streamlit UI ------------------
-st.set_page_config(layout="wide")
-st.title("Texas Coastal Water Quality Dashboard")
-
-param_main = st.selectbox("Select Parameter to Display on Map", sorted(combined_df["CharacteristicName"].dropna().unique()))
-
-# Latest value per station and parameter
-df_latest = (combined_df[combined_df["CharacteristicName"] == param_main]
-             .sort_values("ActivityStartDate")
-             .groupby(["ActivityLocation/LatitudeMeasure", "ActivityLocation/LongitudeMeasure"], as_index=False)
-             .tail(1))
-
-# ------------------ Create Map ------------------
-m = folium.Map(location=[29.5, -97.5], zoom_start=7, control_scale=True)
-
+m = folium.Map(location=[28.9, -96.8], zoom_start=7)
 folium.GeoJson(gdf, style_function=lambda x: {
     "fillColor": "#0b5394",
     "color": "#0b5394",
@@ -71,54 +68,65 @@ folium.GeoJson(gdf, style_function=lambda x: {
     "fillOpacity": 0.1,
 }).add_to(m)
 
-for _, row in df_latest.iterrows():
-    popup_text = f"<b>Parameter:</b> {row['CharacteristicName']}<br><b>Value:</b> {row['ResultMeasureValue']:.2f}<br><b>Date:</b> {row['ActivityStartDate'].date()}"
+marker_cluster = MarkerCluster().add_to(m)
+for _, row in latest_values.iterrows():
+    value = row["ResultMeasureValue"]
+    lat, lon = row["ActivityLocation/LatitudeMeasure"], row["ActivityLocation/LongitudeMeasure"]
     folium.CircleMarker(
-        location=[row["ActivityLocation/LatitudeMeasure"], row["ActivityLocation/LongitudeMeasure"]],
-        radius=min(max(row["ResultMeasureValue"] / 10, 3), 15),
-        color='blue',
+        location=[lat, lon],
+        radius=5 + min(value, 20)/4,
+        popup=f"{parameter_for_map}: {value:.2f}",
+        color="blue",
         fill=True,
         fill_opacity=0.6,
-        popup=popup_text
-    ).add_to(m)
+    ).add_to(marker_cluster)
 
 st_data = st_folium(m, width=1200, height=600)
 
-# ------------------ Plotting Section ------------------
+# ---------------------- انتخاب ایستگاه ----------------------
 if st_data and st_data.get("last_object_clicked"):
     clicked = st_data["last_object_clicked"]
-    lat, lon = clicked["lat"], clicked["lng"]
-    st.subheader("Selected Station")
-    st.write(f"Coordinates: ({lat:.4f}, {lon:.4f})")
+    st.write(f"**Selected Station Coordinates:** {clicked['lat']:.4f}, {clicked['lng']:.4f}")
 
-    params_selected = st.multiselect("Add Parameters to Plot", sorted(combined_df["CharacteristicName"].dropna().unique()), default=[param_main])
+    selected_df = combined_df[
+        (combined_df["ActivityLocation/LatitudeMeasure"].round(4) == round(clicked['lat'], 4)) &
+        (combined_df["ActivityLocation/LongitudeMeasure"].round(4) == round(clicked['lng'], 4))
+    ]
 
-    filtered_plot_df = combined_df[(combined_df["ActivityLocation/LatitudeMeasure"].round(4) == round(lat, 4)) &
-                                   (combined_df["ActivityLocation/LongitudeMeasure"].round(4) == round(lon, 4)) &
-                                   (combined_df["CharacteristicName"].isin(params_selected))]
+    selected_params = st.multiselect("Add parameters to time series plot:", selected_df["CharacteristicName"].dropna().unique())
+    run_plot = st.button("Run Analysis")
 
-    if not filtered_plot_df.empty:
-        fig, ax = plt.subplots(figsize=(10, 4))
-        for p in params_selected:
-            df_p = filtered_plot_df[filtered_plot_df["CharacteristicName"] == p]
-            ax.plot(df_p["ActivityStartDate"], df_p["ResultMeasureValue"], label=p)
+    if run_plot and selected_params:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for param in selected_params:
+            temp = selected_df[selected_df["CharacteristicName"] == param]
+            temp = temp.sort_values("ActivityStartDate")
+            ax.plot(temp["ActivityStartDate"], temp["ResultMeasureValue"], label=param)
+
         ax.set_title("Time Series of Selected Parameters")
         ax.set_xlabel("Date")
         ax.set_ylabel("Value")
         ax.legend()
         ax.grid(True)
-        fig.autofmt_xdate()
+        ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%b-%Y'))
         st.pyplot(fig)
 
-        st.markdown("### Statistical Summary")
-        stats = filtered_plot_df.groupby("CharacteristicName")["ResultMeasureValue"].describe()
-        st.dataframe(stats)
+        # جدول تحلیل آماری
+        stats_df = (
+            selected_df[selected_df["CharacteristicName"].isin(selected_params)]
+            .groupby("CharacteristicName")["ResultMeasureValue"]
+            .agg(["count", "mean", "std", "min", "max"])
+        )
+        st.subheader("Statistical Summary")
+        st.dataframe(stats_df)
 
-        st.markdown("### Correlation Heatmap")
-        pivot = filtered_plot_df.pivot(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue")
-        corr = pivot.corr()
-        fig_corr, ax_corr = plt.subplots()
-        sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax_corr)
-        st.pyplot(fig_corr)
-    else:
-        st.warning("No data available for selected point and parameters.")
+        # همبستگی پارامترها
+        pivot_df = (
+            selected_df[selected_df["CharacteristicName"].isin(selected_params)]
+            .pivot_table(values="ResultMeasureValue", index="ActivityStartDate", columns="CharacteristicName")
+        )
+        corr = pivot_df.corr()
+        fig2, ax2 = plt.subplots()
+        sns.heatmap(corr, annot=True, cmap="coolwarm", ax=ax2)
+        st.subheader("Correlation Heatmap")
+        st.pyplot(fig2)
