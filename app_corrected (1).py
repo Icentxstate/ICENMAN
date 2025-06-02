@@ -10,7 +10,7 @@ from streamlit_folium import st_folium
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
 
-# ---------- Load CSVs from columns_kept.zip ----------
+# ---------- Load CSVs from ZIP ----------
 zip_path = "columns_kept.zip"
 extract_to = "extracted"
 
@@ -34,18 +34,28 @@ for file in csv_files:
         df["ActivityStartDate"] = pd.to_datetime(df["ActivityStartDate"], errors='coerce')
         if not df.empty:
             all_data.append(df)
-    except:
-        pass
+    except Exception as e:
+        st.warning(f"⚠️ Could not load {file}: {e}")
 
 if not all_data:
     st.error("❌ No valid CSV data was loaded.")
     st.stop()
 
 combined_df = pd.concat(all_data, ignore_index=True)
-combined_df = combined_df.dropna(subset=["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "MonitoringLocationIdentifier"])
+
+# ---------- Check required columns ----------
+required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue", "MonitoringLocationIdentifier"]
+missing_cols = [col for col in required_cols if col not in combined_df.columns]
+
+if missing_cols:
+    st.error(f"❌ Missing required columns: {', '.join(missing_cols)}")
+    st.stop()
+
+# ---------- Clean and transform ----------
+combined_df = combined_df.dropna(subset=required_cols)
 combined_df["ResultMeasureValue"] = pd.to_numeric(combined_df["ResultMeasureValue"], errors='coerce')
 
-# ---------- Map OrganizationIdentifier to Formal Names ----------
+# ---------- Map OrganizationIdentifier to names ----------
 organization_lookup = {
     "TCEQMAIN": "Texas Commission on Environmental Quality",
     "NALMS": "North American Lake Management Society",
@@ -56,7 +66,7 @@ organization_lookup = {
 }
 combined_df["OrganizationFormalName"] = combined_df["OrganizationIdentifier"].map(organization_lookup).fillna("Unknown")
 
-# ---------- Load and prepare shapefile ----------
+# ---------- Load shapefile ----------
 shapefile_path = "shapefile_data/filtered_11_counties.shp"
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
 if "COUNTY" not in gdf.columns:
@@ -104,7 +114,7 @@ for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
         "gap_total": gap_total
     }
 
-# ---------- Build Map ----------
+# ---------- Build map ----------
 center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[center.y, center.x], zoom_start=7, tiles="CartoDB positron")
 
@@ -144,7 +154,7 @@ for station_id, info in station_info.items():
 
 st_data = st_folium(m, width=1300, height=600)
 
-# ---------- Click-Based Chart with Highlight ----------
+# ---------- Click-Based Chart ----------
 clicked_id = None
 clicked_lat = None
 clicked_lng = None
@@ -167,7 +177,6 @@ if clicked_id:
     chart_df = df_station[df_station["CharacteristicName"] == selected_param].sort_values("ActivityStartDate")
     st.line_chart(chart_df.set_index("ActivityStartDate")["ResultMeasureValue"])
 
-    # Highlight on map
     folium.CircleMarker(
         location=[clicked_lat, clicked_lng],
         radius=10,
@@ -177,6 +186,5 @@ if clicked_id:
         popup=folium.Popup(f"<b>Highlighted Station:</b><br>{clicked_id}", max_width=300),
     ).add_to(m)
 
-    # Show updated map
     st.subheader("📍 Highlighted Station")
     st_folium(m, width=1300, height=600)
