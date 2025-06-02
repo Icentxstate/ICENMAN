@@ -20,7 +20,7 @@ shp_zip_path = "shape.zip"
 csv_folder = "csv_data"
 shp_folder = "shapefile_data"
 
-# ---------- Download + Unzip (silently) ----------
+# ---------- Download + Unzip ----------
 if not os.path.exists(csv_folder):
     gdown.download(csv_zip_url, csv_zip_path, quiet=True)
     with zipfile.ZipFile(csv_zip_path, 'r') as zip_ref:
@@ -31,7 +31,7 @@ if not os.path.exists(shp_folder):
     with zipfile.ZipFile(shp_zip_path, 'r') as zip_ref:
         zip_ref.extractall(shp_folder)
 
-# ---------- Load CSV Files Recursively ----------
+# ---------- Load CSV Files ----------
 csv_files = []
 for root, _, files in os.walk(csv_folder):
     for file in files:
@@ -47,7 +47,7 @@ for file in csv_files:
         if not df.empty:
             all_data.append(df)
     except:
-        pass  # skip errors silently
+        pass
 
 if not all_data:
     st.error("❌ No valid CSV data was loaded.")
@@ -60,6 +60,12 @@ combined_df["ResultMeasureValue"] = pd.to_numeric(combined_df["ResultMeasureValu
 # ---------- Load Shapefile ----------
 shapefile_path = os.path.join(shp_folder, "filtered_11_counties.shp")
 gdf = gpd.read_file(shapefile_path).to_crs(epsg=4326)
+
+# ✅ Keep only necessary columns
+if "COUNTY" not in gdf.columns:
+    gdf["COUNTY"] = "Unknown"
+
+gdf = gdf[["geometry", "COUNTY"]]
 
 # ---------- Color by Organization ----------
 orgs = combined_df["OrganizationFormalName"].dropna().unique()
@@ -106,6 +112,7 @@ for station_id, group in combined_df.groupby("MonitoringLocationIdentifier"):
 center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[center.y, center.x], zoom_start=7, tiles="CartoDB positron")
 
+# ✅ Add shapefile layer safely
 folium.GeoJson(
     gdf,
     style_function=lambda x: {
@@ -114,9 +121,10 @@ folium.GeoJson(
         "weight": 2,
         "fillOpacity": 0.4,
     },
-    tooltip="County"
+    tooltip="COUNTY"
 ).add_to(m)
 
+# Add monitoring stations
 for station_id, info in station_info.items():
     table_html = "<table style='font-size: 12px'><tr><th>Parameter</th><th>First Date</th><th>Last Date</th><th>Gaps</th></tr>"
     for param in info["params"]:
