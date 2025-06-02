@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from streamlit_folium import st_folium
+import matplotlib.colors as mcolors
 
 st.set_page_config(layout="wide")
 st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
@@ -100,7 +101,6 @@ gdf_safe = gdf[[col for col in gdf.columns if gdf[col].dtype.kind in 'ifO']].cop
 gdf_safe["geometry"] = gdf["geometry"]
 
 # --- Organization colors ---
-import matplotlib.colors as mcolors
 orgs = df["OrganizationFormalName"].dropna().unique()
 color_palette = list(mcolors.TABLEAU_COLORS.values()) + list(mcolors.CSS4_COLORS.values())
 org_colors = {org: color_palette[i % len(color_palette)] for i, org in enumerate(orgs)}
@@ -152,7 +152,7 @@ m.get_root().html.add_child(folium.Element(legend_html))
 # Show map
 st_data = st_folium(m, width=1300, height=600)
 
-# --- Toolbar below map ---
+# --- Click Event ---
 clicked_lat = None
 clicked_lon = None
 if st_data and "last_object_clicked" in st_data:
@@ -165,30 +165,35 @@ if clicked_lat and clicked_lon:
     coords_str = f"{clicked_lat:.5f}, {clicked_lon:.5f}"
     st.write(f"📍 Coordinates: `{coords_str}`")
 
-    if st.button("📈 نمایش گراف و آمار"):
-        clicked_key = f"{clicked_lat},{clicked_lon}"
-        ts_df = df[df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
-        available_subparams = sorted(ts_df["CharacteristicName"].dropna().unique())
+    clicked_key = f"{clicked_lat},{clicked_lon}"
+    ts_df = df[df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
+    available_subparams = sorted(ts_df["CharacteristicName"].dropna().unique())
 
-        st.markdown("**📌 انتخاب پارامترها برای رسم نمودار سری زمانی**")
-        selected_subparams = st.multiselect("📉 پارامترهای مورد نظر را انتخاب کنید", available_subparams, default=[selected_param])
+    st.markdown("**📌 انتخاب پارامترها برای نمودار سری زمانی**")
+    selected_subparams = st.multiselect(
+        "📉 پارامترهای مورد نظر را انتخاب کنید",
+        options=available_subparams,
+        default=[selected_param] if selected_param in available_subparams else available_subparams[:1]
+    )
 
-        if selected_subparams:
-            plot_df = (
-                ts_df[ts_df["CharacteristicName"].isin(selected_subparams)]
-                .pivot(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue")
-                .dropna(how='all')
-            )
-            plot_df.index = plot_df.index.to_period("M").to_timestamp()
+    if selected_subparams:
+        plot_df = (
+            ts_df[ts_df["CharacteristicName"].isin(selected_subparams)]
+            .pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue", aggfunc="mean")
+            .dropna(how='all')
+        )
+        plot_df.index = plot_df.index.to_period("M").to_timestamp()
 
-            st.subheader("📈 سری زمانی پارامترهای انتخاب‌شده")
-            st.line_chart(plot_df)
+        st.subheader("📈 سری زمانی پارامترهای انتخاب‌شده")
+        st.line_chart(plot_df)
 
-            st.markdown("📊 **خلاصه آماری پارامترها**")
-            st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
+        st.markdown("📊 **خلاصه آماری پارامترها**")
+        st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
 
-            st.markdown("🧮 **همبستگی پارامترها (Heatmap)**")
-            corr = plot_df.corr()
-            fig, ax = plt.subplots(figsize=(8, 6))
-            sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-            st.pyplot(fig)
+        st.markdown("🧮 **همبستگی پارامترها (Heatmap)**")
+        corr = plot_df.corr()
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+        st.pyplot(fig)
+    else:
+        st.info("پارامتری برای نمایش انتخاب نشده است.")
