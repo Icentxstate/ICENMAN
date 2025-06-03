@@ -161,7 +161,7 @@ if st_data and "last_object_clicked" in st_data:
 
 if clicked_lat and clicked_lon:
     st.markdown("---")
-    st.markdown("### 🧪 Selected Station")
+    st.markdown("### 🧪 Selected Monitoring Station")
     coords_str = f"{clicked_lat:.5f}, {clicked_lon:.5f}"
     st.write(f"📍 Coordinates: `{coords_str}`")
 
@@ -169,9 +169,9 @@ if clicked_lat and clicked_lon:
     ts_df = df[df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
     available_subparams = sorted(ts_df["CharacteristicName"].dropna().unique())
 
-    st.markdown("**📌 انتخاب پارامترها برای نمودار سری زمانی**")
+    st.markdown("**📌 Select Parameters to Plot**")
     selected_subparams = st.multiselect(
-        "📉 پارامترهای مورد نظر را انتخاب کنید",
+        "📉 Choose one or more parameters:",
         options=available_subparams,
         default=[selected_param] if selected_param in available_subparams else available_subparams[:1]
     )
@@ -182,18 +182,25 @@ if clicked_lat and clicked_lon:
             .pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue", aggfunc="mean")
             .dropna(how='all')
         )
-        plot_df.index = plot_df.index.to_period("M").to_timestamp()
 
-        st.subheader("📈 سری زمانی پارامترهای انتخاب‌شده")
+        # Ensure date index covers full range through 2026
+        full_index = pd.date_range(start=plot_df.index.min(), end="2026-12-31", freq="MS")
+        plot_df = plot_df.reindex(full_index)
+
+        # Format index for display
+        plot_df.index.name = "Month"
+        plot_df.index = pd.to_datetime(plot_df.index)
+
+        st.subheader("📈 Time Series Plot")
         st.line_chart(plot_df)
 
-        st.markdown("📊 **خلاصه آماری پارامترها**")
+        st.markdown("📊 Statistical Summary")
         st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
 
-        st.markdown("🧮 **همبستگی پارامترها (Heatmap)**")
+        st.markdown("🧮 Correlation Heatmap")
         corr = plot_df.corr()
         fig, ax = plt.subplots(figsize=(8, 6))
         sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
         st.pyplot(fig)
     else:
-        st.info("پارامتری برای نمایش انتخاب نشده است.")
+        st.info("No parameter selected for time series.")
