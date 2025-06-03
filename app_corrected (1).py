@@ -161,46 +161,41 @@ if st_data and "last_object_clicked" in st_data:
 
 if clicked_lat and clicked_lon:
     st.markdown("---")
-    st.markdown("### 🧪 Selected Monitoring Station")
+    st.markdown("### 🧪 Selected Station")
     coords_str = f"{clicked_lat:.5f}, {clicked_lon:.5f}"
-    st.write(f"📍 Coordinates: `{coords_str}`")
+    st.write(f"📍 Coordinates: {coords_str}")
 
     clicked_key = f"{clicked_lat},{clicked_lon}"
     ts_df = df[df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
     available_subparams = sorted(ts_df["CharacteristicName"].dropna().unique())
 
-    st.markdown("**📌 Select Parameters to Plot**")
-    selected_subparams = st.multiselect(
-        "📉 Choose one or more parameters:",
-        options=available_subparams,
-        default=[selected_param] if selected_param in available_subparams else available_subparams[:1]
+st.markdown("**📌 Select parameters for time series plot**")
+selected_subparams = st.multiselect(
+    "📉 Choose parameters to visualize:",
+    options=available_subparams,
+    default=[selected_param] if selected_param in available_subparams else available_subparams[:1]
+)
+
+if selected_subparams:
+    plot_df = (
+        ts_df[ts_df["CharacteristicName"].isin(selected_subparams)]
+        .pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue", aggfunc="mean")
+        .dropna(how='all')
     )
+    plot_df.index = plot_df.index.to_period("M").to_timestamp()
 
-    if selected_subparams:
-        plot_df = (
-            ts_df[ts_df["CharacteristicName"].isin(selected_subparams)]
-            .pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue", aggfunc="mean")
-            .dropna(how='all')
-        )
+    st.subheader("📈 Time Series of Selected Parameters")
+    st.line_chart(plot_df)
 
-        # Ensure date index covers full range through 2026
-        full_index = pd.date_range(start=plot_df.index.min(), end="2026-12-31", freq="MS")
-        plot_df = plot_df.reindex(full_index)
+    st.markdown("📊 **Statistical Summary**")
+    st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
 
-        # Format index for display
-        plot_df.index.name = "Month"
-        plot_df.index = pd.to_datetime(plot_df.index)
+    st.markdown("🧮 **Correlation Heatmap**")
+    corr = plot_df.corr()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
+    st.pyplot(fig)
+else:
+    st.info("Please select at least one parameter to visualize.")
 
-        st.subheader("📈 Time Series Plot")
-        st.line_chart(plot_df)
-
-        st.markdown("📊 Statistical Summary")
-        st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
-
-        st.markdown("🧮 Correlation Heatmap")
-        corr = plot_df.corr()
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-        st.pyplot(fig)
-    else:
-        st.info("No parameter selected for time series.")
+    st.info("No parameters selected for display.")
