@@ -12,7 +12,7 @@ from streamlit_folium import st_folium
 import matplotlib.colors as mcolors
 
 st.set_page_config(layout="wide")
-st.title("🌊 Texas Coastal Hydrologic Monitoring Dashboard")
+st.title("🌎 Texas Coastal Hydrologic Monitoring Dashboard")
 
 # --- Paths ---
 csv_zip = "columns_kept.zip"
@@ -53,7 +53,7 @@ if not all_data:
 
 df = pd.concat(all_data, ignore_index=True)
 
-# --- Basic Clean ---
+# --- Clean & Validate ---
 required_cols = ["ActivityStartDate", "CharacteristicName", "ResultMeasureValue"]
 missing = [col for col in required_cols if col not in df.columns]
 if missing:
@@ -75,14 +75,11 @@ org_lookup = {
 df["OrganizationFormalName"] = df["OrganizationIdentifier"].map(org_lookup).fillna("Unknown")
 df["StationKey"] = df["ActivityLocation/LatitudeMeasure"].astype(str) + "," + df["ActivityLocation/LongitudeMeasure"].astype(str)
 
-# --- Parameter Selector (Top Bar) ---
+# --- Select Parameter for Map ---
 available_params = sorted(df["CharacteristicName"].dropna().unique())
-selected_param = st.selectbox("📌 Select a Water Quality Parameter for Map", available_params)
+selected_param = st.selectbox("📌 Select a Water Quality Parameter for the Map", available_params)
 
-# --- Filter by selected parameter ---
 filtered_df = df[df["CharacteristicName"] == selected_param]
-
-# --- Last Value Per Station ---
 latest_values = (
     filtered_df.sort_values("ActivityStartDate")
     .groupby("StationKey")
@@ -90,27 +87,30 @@ latest_values = (
     .set_index("StationKey")
 )
 
-# --- Load shapefile ---
+# --- Load Shapefile ---
 shp_files = glob.glob(os.path.join(shp_folder, "**", "*.shp"), recursive=True)
 if not shp_files:
     st.error("❌ No shapefile found.")
     st.stop()
 
 gdf = gpd.read_file(shp_files[0]).to_crs(epsg=4326)
+if gdf.empty:
+    st.error("❌ The shapefile contains no geometry.")
+    st.stop()
+
 gdf_safe = gdf[[col for col in gdf.columns if gdf[col].dtype.kind in 'ifO']].copy()
 gdf_safe["geometry"] = gdf["geometry"]
 
-# --- Organization colors ---
+# --- Map Colors ---
 orgs = df["OrganizationFormalName"].dropna().unique()
 color_palette = list(mcolors.TABLEAU_COLORS.values()) + list(mcolors.CSS4_COLORS.values())
 org_colors = {org: color_palette[i % len(color_palette)] for i, org in enumerate(orgs)}
 
-# --- Map ---
-st.subheader(f"🗺️ Map of Latest {selected_param} Measurements")
+# --- Render Map ---
+st.subheader(f"🗺️ Latest Measurements for: {selected_param}")
 map_center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[map_center.y, map_center.x], zoom_start=7, tiles="CartoDB positron")
 
-# Add counties
 folium.GeoJson(
     gdf_safe,
     style_function=lambda x: {
@@ -121,7 +121,6 @@ folium.GeoJson(
     },
 ).add_to(m)
 
-# Add points
 for key, row in latest_values.iterrows():
     lat, lon = row["ActivityLocation/LatitudeMeasure"], row["ActivityLocation/LongitudeMeasure"]
     val = row["ResultMeasureValue"]
@@ -129,7 +128,7 @@ for key, row in latest_values.iterrows():
     color = org_colors.get(org, "gray")
     popup_html = f"""
     <b>Location:</b> {key}<br>
-    <b>Org:</b> {org}<br>
+    <b>Organization:</b> {org}<br>
     <b>{selected_param}:</b> {val:.2f}<br>
     <b>Date:</b> {row['ActivityStartDate'].strftime('%Y-%m-%d')}
     """
@@ -142,17 +141,15 @@ for key, row in latest_values.iterrows():
         popup=folium.Popup(popup_html, max_width=300),
     ).add_to(m)
 
-# Add Legend
 legend_html = "<div style='position: fixed; bottom: 50px; left: 50px; z-index:9999; background:white; padding:10px; border:1px solid #ccc'><b>Organization Legend</b><br>"
 for org, color in org_colors.items():
     legend_html += f"<span style='display:inline-block;width:12px;height:12px;background:{color};margin-right:5px'></span>{org}<br>"
 legend_html += "</div>"
 m.get_root().html.add_child(folium.Element(legend_html))
 
-# Show map
 st_data = st_folium(m, width=1300, height=600)
 
-# --- Click Event ---
+# --- On Click ---
 clicked_lat = None
 clicked_lon = None
 if st_data and "last_object_clicked" in st_data:
@@ -161,41 +158,53 @@ if st_data and "last_object_clicked" in st_data:
 
 if clicked_lat and clicked_lon:
     st.markdown("---")
-    st.markdown("### 🧪 Selected Station")
+    st.markdown("### 📍 Selected Station")
     coords_str = f"{clicked_lat:.5f}, {clicked_lon:.5f}"
-    st.write(f"📍 Coordinates: {coords_str}")
+    st.write(f"Coordinates: `{coords_str}`")
 
     clicked_key = f"{clicked_lat},{clicked_lon}"
     ts_df = df[df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
     available_subparams = sorted(ts_df["CharacteristicName"].dropna().unique())
 
-st.markdown("**📌 Select parameters for time series plot**")
-selected_subparams = st.multiselect(
-    "📉 Choose parameters to visualize:",
-    options=available_subparams,
-    default=[selected_param] if selected_param in available_subparams else available_subparams[:1]
-)
-
-if selected_subparams:
-    plot_df = (
-        ts_df[ts_df["CharacteristicName"].isin(selected_subparams)]
-        .pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue", aggfunc="mean")
-        .dropna(how='all')
+    st.markdown("**📌 Select Parameters to Plot:**")
+    selected_subparams = st.multiselect(
+        "Choose one or more parameters for time series plot:",
+        options=available_subparams,
+        default=[selected_param] if selected_param in available_subparams else available_subparams[:1]
     )
-    plot_df.index = plot_df.index.to_period("M").to_timestamp()
 
-    st.subheader("📈 Time Series of Selected Parameters")
-    st.line_chart(plot_df)
+    if selected_subparams:
+        plot_df = (
+            ts_df[ts_df["CharacteristicName"].isin(selected_subparams)]
+            .pivot_table(index="ActivityStartDate", columns="CharacteristicName", values="ResultMeasureValue", aggfunc="mean")
+            .dropna(how='all')
+        )
 
-    st.markdown("📊 **Statistical Summary**")
-    st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
+        plot_df.index = pd.to_datetime(plot_df.index)
+        plot_df = plot_df[~plot_df.index.duplicated(keep="first")]
+        plot_df = plot_df.reindex(pd.date_range(start=plot_df.index.min(), end="2026-12-31", freq="MS"))
+        plot_df.index.name = "Date"
 
-    st.markdown("🧮 **Correlation Heatmap**")
-    corr = plot_df.corr()
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-    st.pyplot(fig)
-else:
-    st.info("Please select at least one parameter to visualize.")
+        if plot_df.dropna(how='all').empty:
+            st.info("❗No valid data available for the selected parameters at this location.")
+        else:
+            st.subheader("📈 Time Series Plot")
+            fig, ax = plt.subplots(figsize=(10, 4))
+            plot_df.plot(ax=ax, marker='o', linewidth=2)
+            ax.set_title("Time Series of Selected Parameters")
+            ax.set_xlabel("Date")
+            ax.set_ylabel("Value")
+            ax.grid(True)
+            fig.autofmt_xdate()
+            st.pyplot(fig)
 
-    st.info("No parameters selected for display.")
+            st.markdown("📊 Statistical Summary")
+            st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
+
+            st.markdown("🧮 Correlation Heatmap")
+            corr = plot_df.corr()
+            fig2, ax2 = plt.subplots(figsize=(8, 6))
+            sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax2)
+            st.pyplot(fig2)
+    else:
+        st.info("Please select at least one parameter to display.")
