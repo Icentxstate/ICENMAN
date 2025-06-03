@@ -106,7 +106,7 @@ color_palette = list(mcolors.TABLEAU_COLORS.values()) + list(mcolors.CSS4_COLORS
 org_colors = {org: color_palette[i % len(color_palette)] for i, org in enumerate(orgs)}
 
 # --- Map ---
-st.subheader(f"🗺️ Map of Latest {selected_param} Measurements")
+st.subheader(f"🗺️ Latest Measurements of {selected_param}")
 map_center = gdf.geometry.centroid.iloc[0]
 m = folium.Map(location=[map_center.y, map_center.x], zoom_start=7, tiles="CartoDB positron")
 
@@ -169,9 +169,27 @@ if clicked_lat and clicked_lon:
     ts_df = df[df["StationKey"] == clicked_key].sort_values("ActivityStartDate")
     available_subparams = sorted(ts_df["CharacteristicName"].dropna().unique())
 
-    st.markdown("**📌 انتخاب پارامترها برای نمودار سری زمانی**")
+    # Show date range summary per parameter
+    st.markdown("**🕒 Sample Date Ranges per Parameter at this Station**")
+    param_ranges = (
+        ts_df.groupby("CharacteristicName")["ActivityStartDate"]
+        .agg(["min", "max", "count"])
+        .rename(columns={"min": "Start Date", "max": "End Date", "count": "Samples"})
+        .reset_index()
+    )
+    param_ranges["Start Date"] = param_ranges["Start Date"].dt.strftime("%Y-%m-%d")
+    param_ranges["End Date"] = param_ranges["End Date"].dt.strftime("%Y-%m-%d")
+    st.dataframe(param_ranges.rename(columns={
+        "CharacteristicName": "Parameter",
+        "Start Date": "📅 First Date",
+        "End Date": "📅 Last Date",
+        "Samples": "🔢 Sample Count"
+    }))
+
+    # Parameter selector
+    st.markdown("**📌 Select Parameters for Time Series**")
     selected_subparams = st.multiselect(
-        "📉 پارامترهای مورد نظر را انتخاب کنید",
+        "📉 Choose one or more parameters to visualize",
         options=available_subparams,
         default=[selected_param] if selected_param in available_subparams else available_subparams[:1]
     )
@@ -184,16 +202,22 @@ if clicked_lat and clicked_lon:
         )
         plot_df.index = plot_df.index.to_period("M").to_timestamp()
 
-        st.subheader("📈 سری زمانی پارامترهای انتخاب‌شده")
-        st.line_chart(plot_df)
+        st.subheader("📈 Time Series (Dot Plot)")
+        fig, ax = plt.subplots(figsize=(10, 5))
+        for col in plot_df.columns:
+            ax.plot(plot_df.index, plot_df[col], 'o-', label=col)
+        ax.set_ylabel("Value")
+        ax.set_xlabel("Date")
+        ax.legend()
+        st.pyplot(fig)
 
-        st.markdown("📊 **خلاصه آماری پارامترها**")
+        st.markdown("📊 **Statistical Summary**")
         st.dataframe(plot_df.describe().T.style.format("{:.2f}"))
 
-        st.markdown("🧮 **همبستگی پارامترها (Heatmap)**")
+        st.markdown("🧮 **Correlation Heatmap**")
         corr = plot_df.corr()
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax)
-        st.pyplot(fig)
+        fig2, ax2 = plt.subplots(figsize=(8, 6))
+        sns.heatmap(corr, annot=True, cmap="coolwarm", fmt=".2f", ax=ax2)
+        st.pyplot(fig2)
     else:
-        st.info("پارامتری برای نمایش انتخاب نشده است.")
+        st.info("Please select at least one parameter to view charts.")
